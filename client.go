@@ -39,6 +39,8 @@ type Client struct {
 	rateLimit     time.Duration // min delay between authenticated HN requests (0 = no limit)
 	rateMu        sync.Mutex
 	lastHNRequest time.Time
+	sessionOnce   sync.Once
+	sessionValid  bool
 }
 
 // Option customises a Client.
@@ -99,10 +101,39 @@ func New(cookie string, opts ...Option) (*Client, error) {
 	return c, nil
 }
 
+// ValidateSession checks whether the user cookie is still valid by fetching the
+// front page and inspecting the HTML for a logout link. Returns ErrUnauthenticated
+// if the session has expired. This is called automatically on the first
+// authenticated request.
+func (c *Client) ValidateSession(ctx context.Context) error {
+	body, err := c.doGet(ctx, hnBase+"/", true)
+	if err != nil {
+		return fmt.Errorf("hn: validate session: %w", err)
+	}
+	if !isAuthenticated(body) {
+		return ErrUnauthenticated
+	}
+	c.sessionValid = true
+	return nil
+}
+
+// ensureSession runs ValidateSession exactly once, on the first authenticated
+// request. Subsequent calls are no-ops.
+func (c *Client) ensureSession(ctx context.Context) error {
+	var sessionErr error
+	c.sessionOnce.Do(func() {
+		sessionErr = c.ValidateSession(ctx)
+	})
+	return sessionErr
+}
+
 // --- internal HTTP helpers ---
 
 // hnGet performs an authenticated GET against news.ycombinator.com.
 func (c *Client) hnGet(ctx context.Context, path string) ([]byte, error) {
+	if err := c.ensureSession(ctx); err != nil {
+		return nil, err
+	}
 	if err := c.waitRateLimit(ctx); err != nil {
 		return nil, err
 	}
@@ -112,6 +143,9 @@ func (c *Client) hnGet(ctx context.Context, path string) ([]byte, error) {
 // hnGetNoFollow performs a GET that does NOT follow redirects, returning
 // (statusCode, Location header). Used for action endpoints that 302 on success.
 func (c *Client) hnGetNoFollow(ctx context.Context, path string) (int, string, error) {
+	if err := c.ensureSession(ctx); err != nil {
+		return 0, "", err
+	}
 	if err := c.waitRateLimit(ctx); err != nil {
 		return 0, "", err
 	}
@@ -133,6 +167,9 @@ func (c *Client) hnGetNoFollow(ctx context.Context, path string) (int, string, e
 
 // hnPost performs an authenticated HTML form POST against news.ycombinator.com.
 func (c *Client) hnPost(ctx context.Context, path string, form url.Values) ([]byte, error) {
+	if err := c.ensureSession(ctx); err != nil {
+		return nil, err
+	}
 	if err := c.waitRateLimit(ctx); err != nil {
 		return nil, err
 	}

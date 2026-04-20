@@ -457,6 +457,13 @@ func parseUserSettings(body []byte, username string) (*UserSettings, error) {
 	return s, nil
 }
 
+// isAuthenticated checks whether an HN HTML response was served to a logged-in
+// session by looking for the logout link / user nav element.
+func isAuthenticated(body []byte) bool {
+	raw := string(body)
+	return strings.Contains(raw, `id="logout"`) || strings.Contains(raw, `id='logout'`)
+}
+
 // ---------- helpers ----------
 
 // splitByAthing breaks the raw HTML into per-story chunks.
@@ -487,6 +494,11 @@ func extractIDAuthMap(re *regexp.Regexp, raw string) map[int]string {
 
 // parseSelectBool extracts the selected value from an HN <select name="name">
 // element and returns true only when the selected option is "yes".
+//
+// HN renders these as:
+//
+//	<select name="showd"><option selected="t">yes</option><option>no</option></select>
+//	<select name="showd"><option>yes</option><option selected="t">no</option></select>
 func parseSelectBool(raw, name string) bool {
 	start := strings.Index(raw, `name="`+name+`"`)
 	if start == -1 {
@@ -498,17 +510,26 @@ func parseSelectBool(raw, name string) bool {
 		return false
 	}
 	selectBlock = selectBlock[:end]
+
+	// Find the <option> that contains "selected"
 	selectedIdx := strings.Index(selectBlock, "selected")
 	if selectedIdx == -1 {
 		return false
 	}
-	before := selectBlock[:selectedIdx]
-	lastOption := strings.LastIndex(before, "<option")
-	if lastOption == -1 {
+
+	// Read forward from "selected" to find the option content between > and <
+	after := selectBlock[selectedIdx:]
+	gtIdx := strings.Index(after, ">")
+	if gtIdx == -1 {
 		return false
 	}
-	optionTag := before[lastOption:]
-	return strings.Contains(optionTag, ">yes<") || strings.HasSuffix(strings.TrimSpace(optionTag), ">yes")
+	after = after[gtIdx+1:]
+	ltIdx := strings.Index(after, "<")
+	if ltIdx == -1 {
+		return false
+	}
+	value := strings.TrimSpace(after[:ltIdx])
+	return value == "yes"
 }
 
 func storyType(title, storyURL string) string {
