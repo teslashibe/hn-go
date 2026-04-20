@@ -166,27 +166,28 @@ func (c *Client) doGet(ctx context.Context, rawURL string, auth bool) ([]byte, e
 	return c.execute(req)
 }
 
-// waitRateLimit blocks until the configured minimum gap since the last HN
-// request has elapsed, then marks the current time. No-op if rateLimit == 0.
+// waitRateLimit serialises authenticated requests so that at most one fires
+// per rateLimit interval. The lock is held across the sleep to prevent
+// concurrent callers from reading a stale lastHNRequest and bypassing the gap.
 func (c *Client) waitRateLimit(ctx context.Context) error {
 	if c.rateLimit == 0 {
 		return nil
 	}
 	c.rateMu.Lock()
-	wait := time.Until(c.lastHNRequest.Add(c.rateLimit))
-	c.rateMu.Unlock()
+	defer c.rateMu.Unlock()
 
+	wait := time.Until(c.lastHNRequest.Add(c.rateLimit))
 	if wait > 0 {
+		c.rateMu.Unlock()
 		select {
 		case <-time.After(wait):
 		case <-ctx.Done():
+			c.rateMu.Lock()
 			return ctx.Err()
 		}
+		c.rateMu.Lock()
 	}
-
-	c.rateMu.Lock()
 	c.lastHNRequest = time.Now()
-	c.rateMu.Unlock()
 	return nil
 }
 
@@ -202,6 +203,8 @@ func (c *Client) newHNReq(ctx context.Context, method, rawURL string, body io.Re
 	return req, nil
 }
 
+const maxResponseBody = 10 << 20 // 10 MB
+
 func (c *Client) execute(req *http.Request) ([]byte, error) {
 	resp, err := c.http.Do(req)
 	if err != nil {
@@ -209,7 +212,7 @@ func (c *Client) execute(req *http.Request) ([]byte, error) {
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBody))
 	if err != nil {
 		return nil, fmt.Errorf("hn: read body: %w", err)
 	}

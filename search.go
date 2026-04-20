@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"strings"
 )
 
@@ -20,25 +21,25 @@ func (c *Client) SearchByDate(ctx context.Context, query string, opts SearchOpti
 }
 
 func (c *Client) algoliaSearch(ctx context.Context, endpoint, query string, opts SearchOptions) (*SearchResult, error) {
-	params := make([]string, 0, 8)
-	params = append(params, "query="+encodeQuery(query))
+	v := url.Values{}
+	v.Set("query", query)
 
 	if len(opts.Tags) > 0 {
 		tags := make([]string, len(opts.Tags))
 		for i, t := range opts.Tags {
 			tags[i] = string(t)
 		}
-		params = append(params, "tags="+strings.Join(tags, ","))
+		v.Set("tags", strings.Join(tags, ","))
 	}
 
 	hitsPerPage := opts.HitsPerPage
 	if hitsPerPage <= 0 {
 		hitsPerPage = 20
 	}
-	params = append(params, fmt.Sprintf("hitsPerPage=%d", hitsPerPage))
+	v.Set("hitsPerPage", fmt.Sprintf("%d", hitsPerPage))
 
 	if opts.Page > 0 {
-		params = append(params, fmt.Sprintf("page=%d", opts.Page))
+		v.Set("page", fmt.Sprintf("%d", opts.Page))
 	}
 
 	var numeric []string
@@ -49,10 +50,10 @@ func (c *Client) algoliaSearch(ctx context.Context, endpoint, query string, opts
 		numeric = append(numeric, fmt.Sprintf("num_comments>=%d", opts.MinComments))
 	}
 	if len(numeric) > 0 {
-		params = append(params, "numericFilters="+encodeQuery(strings.Join(numeric, ",")))
+		v.Set("numericFilters", strings.Join(numeric, ","))
 	}
 
-	rawURL := fmt.Sprintf("%s/%s?%s", algoliaBase, endpoint, strings.Join(params, "&"))
+	rawURL := fmt.Sprintf("%s/%s?%s", algoliaBase, endpoint, v.Encode())
 
 	body, err := c.publicGet(ctx, rawURL)
 	if err != nil {
@@ -64,16 +65,4 @@ func (c *Client) algoliaSearch(ctx context.Context, endpoint, query string, opts
 		return nil, fmt.Errorf("hn: decode search result: %w", err)
 	}
 	return &result, nil
-}
-
-// encodeQuery does minimal percent-encoding for Algolia query strings.
-func encodeQuery(s string) string {
-	return strings.NewReplacer(
-		" ", "%20",
-		"#", "%23",
-		"&", "%26",
-		"=", "%3D",
-		"+", "%2B",
-		",", "%2C",
-	).Replace(s)
 }

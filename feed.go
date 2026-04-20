@@ -185,7 +185,6 @@ func (c *Client) GetUserSettings(ctx context.Context, username string) (*UserSet
 
 var (
 	reItemID    = regexp.MustCompile(`(?:class="athing|class="athing submission") id="(\d+)"`)
-	reRank      = regexp.MustCompile(`<span class="rank">(\d+)\.</span>`)
 	reTitleLink = regexp.MustCompile(`class="titleline"><a href="([^"]+)"[^>]*>([^<]+)`)
 	reDomain    = regexp.MustCompile(`class="sitestr">([^<]+)<`)
 	rePoints    = regexp.MustCompile(`id="score_\d+">(\d+) points?`)
@@ -201,7 +200,7 @@ var (
 	reCommentLevel  = regexp.MustCompile(`indent.*?width="(\d+)"`)
 	reCommentAuthor = regexp.MustCompile(`class="hnuser">([^<]+)<`)
 	reCommentAge    = regexp.MustCompile(`class="age"[^>]*title="([^"]+)"`)
-	reCommentText   = regexp.MustCompile(`(?s)class="commtext[^"]*"[^>]*>(.*?)</span>`)
+	reCommentText   = regexp.MustCompile(`(?s)class="commtext[^"]*"[^>]*>(.*?)</div>`)
 	reCommentID     = regexp.MustCompile(`id="(\d+)"`)
 	reReplyGoto     = regexp.MustCompile(`reply\?id=(\d+)&amp;goto=([^"]+)`)
 
@@ -209,7 +208,6 @@ var (
 	reFNID      = regexp.MustCompile(`name="fnid"\s+value="([^"]+)"`)
 	reFNOP      = regexp.MustCompile(`name="fnop"\s+value="([^"]+)"`)
 	reHMAC      = regexp.MustCompile(`name="hmac"\s+value="([^"]+)"`)
-	reParent    = regexp.MustCompile(`name="parent"\s+value="([^"]+)"`)
 	reGoto      = regexp.MustCompile(`name="goto"\s+value="([^"]+)"`)
 
 	// newcomments-specific
@@ -450,10 +448,8 @@ func parseUserSettings(body []byte, username string) (*UserSettings, error) {
 			*dst = m[2]
 		}
 	}
-	s.ShowDead = strings.Contains(raw, `name="showd"`) &&
-		strings.Contains(raw, `<option selected`)
-	s.NoPro = strings.Contains(raw, `name="nopro"`) &&
-		strings.Contains(raw, `<option selected`)
+	s.ShowDead = parseSelectBool(raw, "showd")
+	s.NoPro = parseSelectBool(raw, "nopro")
 
 	if s.HMAC == "" {
 		return nil, fmt.Errorf("%w: hmac not found in user settings", ErrParseFailure)
@@ -489,14 +485,47 @@ func extractIDAuthMap(re *regexp.Regexp, raw string) map[int]string {
 	return m
 }
 
-func storyType(title, url string) string {
+// parseSelectBool extracts the selected value from an HN <select name="name">
+// element and returns true only when the selected option is "yes".
+func parseSelectBool(raw, name string) bool {
+	start := strings.Index(raw, `name="`+name+`"`)
+	if start == -1 {
+		return false
+	}
+	selectBlock := raw[start:]
+	end := strings.Index(selectBlock, "</select>")
+	if end == -1 {
+		return false
+	}
+	selectBlock = selectBlock[:end]
+	selectedIdx := strings.Index(selectBlock, "selected")
+	if selectedIdx == -1 {
+		return false
+	}
+	before := selectBlock[:selectedIdx]
+	lastOption := strings.LastIndex(before, "<option")
+	if lastOption == -1 {
+		return false
+	}
+	optionTag := before[lastOption:]
+	return strings.Contains(optionTag, ">yes<") || strings.HasSuffix(strings.TrimSpace(optionTag), ">yes")
+}
+
+func storyType(title, storyURL string) string {
 	tl := strings.ToLower(title)
 	switch {
 	case strings.HasPrefix(tl, "ask hn:"):
 		return "ask"
 	case strings.HasPrefix(tl, "show hn:"):
 		return "show"
-	case url == "":
+	case strings.HasPrefix(tl, "launch hn:"):
+		return "launch"
+	case strings.Contains(tl, "is hiring") || strings.Contains(tl, "yc "):
+		if storyURL == "" {
+			return "job"
+		}
+		return "story"
+	case storyURL == "":
 		return "ask"
 	default:
 		return "story"

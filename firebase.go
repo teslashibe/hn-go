@@ -93,8 +93,12 @@ func (c *Client) ItemsBatch(ctx context.Context, ids []int, concurrency int) []*
 		wg.Add(1)
 		go func(id int) {
 			defer wg.Done()
-			sem <- struct{}{}
-			defer func() { <-sem }()
+			select {
+			case sem <- struct{}{}:
+				defer func() { <-sem }()
+			case <-ctx.Done():
+				return
+			}
 
 			item, err := c.Item(ctx, id)
 			if err != nil || item == nil || item.Dead || item.Deleted {

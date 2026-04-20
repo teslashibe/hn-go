@@ -153,8 +153,6 @@ type SearchOptions struct {
 	MinPoints int
 	// MinComments filters results with num_comments >= MinComments (0 = no filter).
 	MinComments int
-	// ByDate switches ranking to most-recent-first instead of relevance.
-	ByDate bool
 }
 
 // SubmitForm holds the one-time FNID nonce fetched from /submit.

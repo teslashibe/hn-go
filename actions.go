@@ -98,6 +98,9 @@ func (c *Client) Flag(ctx context.Context, itemID int, auth string) error {
 //
 // Use GetReplyForm(ctx, parentID) to obtain the ReplyForm first.
 func (c *Client) Comment(ctx context.Context, form *ReplyForm, text string) error {
+	if form == nil {
+		return fmt.Errorf("hn: comment: reply form is nil — call GetReplyForm first")
+	}
 	if form.HMAC == "" {
 		return fmt.Errorf("hn: comment: reply form has no hmac")
 	}
@@ -127,6 +130,9 @@ func (c *Client) Comment(ctx context.Context, form *ReplyForm, text string) erro
 // For a link post: set title + storyURL, leave text empty.
 // For an Ask HN post: set title + text, leave storyURL empty.
 func (c *Client) Submit(ctx context.Context, form *SubmitForm, title, storyURL, text string) error {
+	if form == nil {
+		return fmt.Errorf("hn: submit: form is nil — call GetSubmitForm first")
+	}
 	if form.FNID == "" {
 		return fmt.Errorf("hn: submit: form has no fnid (not logged in?)")
 	}
@@ -182,6 +188,9 @@ func (c *Client) SubmitAskHN(ctx context.Context, title, text string) error {
 // UpdateUserSettings persists updated profile settings via /user.
 // Fetch current values with GetUserSettings first to populate HMAC + ID.
 func (c *Client) UpdateUserSettings(ctx context.Context, s *UserSettings) error {
+	if s == nil {
+		return fmt.Errorf("hn: update settings: settings is nil — call GetUserSettings first")
+	}
 	if s.HMAC == "" || s.ID == "" {
 		return fmt.Errorf("hn: update settings: id and hmac are required")
 	}
