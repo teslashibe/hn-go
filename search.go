@@ -24,12 +24,19 @@ func (c *Client) algoliaSearch(ctx context.Context, endpoint, query string, opts
 	v := url.Values{}
 	v.Set("query", query)
 
-	if len(opts.Tags) > 0 {
-		tags := make([]string, len(opts.Tags))
-		for i, t := range opts.Tags {
-			tags[i] = string(t)
+	if len(opts.Tags) > 0 || len(opts.TagsOr) > 0 {
+		var parts []string
+		for _, t := range opts.Tags {
+			parts = append(parts, string(t))
 		}
-		v.Set("tags", strings.Join(tags, ","))
+		if len(opts.TagsOr) > 0 {
+			orTags := make([]string, len(opts.TagsOr))
+			for i, t := range opts.TagsOr {
+				orTags[i] = string(t)
+			}
+			parts = append(parts, "("+strings.Join(orTags, ",")+")")
+		}
+		v.Set("tags", strings.Join(parts, ","))
 	}
 
 	hitsPerPage := opts.HitsPerPage

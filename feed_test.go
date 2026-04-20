@@ -480,10 +480,3 @@ func TestIsAuthenticated_NoAuthPage(t *testing.T) {
 		t.Error("expected unauthenticated page to return false")
 	}
 }
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}

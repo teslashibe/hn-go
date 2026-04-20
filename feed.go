@@ -201,7 +201,7 @@ var (
 	reCommentAuthor = regexp.MustCompile(`class="hnuser">([^<]+)<`)
 	reCommentAge    = regexp.MustCompile(`class="age"[^>]*title="([^"]+)"`)
 	reCommentText   = regexp.MustCompile(`(?s)class="commtext[^"]*"[^>]*>(.*?)</div>`)
-	reCommentID     = regexp.MustCompile(`id="(\d+)"`)
+	reCommentID     = regexp.MustCompile(`^\s*id="(\d+)"`)
 	reReplyGoto     = regexp.MustCompile(`reply\?id=(\d+)&amp;goto=([^"]+)`)
 
 	reInputVal  = regexp.MustCompile(`name="([^"]+)"[^>]+value="([^"]*)"`)

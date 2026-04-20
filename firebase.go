@@ -77,21 +77,19 @@ func (c *Client) FirebaseUser(ctx context.Context, username string) (*FirebaseUs
 }
 
 // ItemsBatch fetches multiple items concurrently up to concurrency goroutines.
-// Dead or deleted items are silently omitted from the result.
+// Dead or deleted items are silently omitted from the result. The returned
+// slice preserves the input order of ids.
 func (c *Client) ItemsBatch(ctx context.Context, ids []int, concurrency int) []*FirebaseItem {
 	if concurrency <= 0 {
 		concurrency = 10
 	}
 	sem := make(chan struct{}, concurrency)
-	var (
-		mu      sync.Mutex
-		results = make([]*FirebaseItem, 0, len(ids))
-		wg      sync.WaitGroup
-	)
+	slots := make([]*FirebaseItem, len(ids))
 
-	for _, id := range ids {
+	var wg sync.WaitGroup
+	for i, id := range ids {
 		wg.Add(1)
-		go func(id int) {
+		go func(idx, id int) {
 			defer wg.Done()
 			select {
 			case sem <- struct{}{}:
@@ -104,12 +102,17 @@ func (c *Client) ItemsBatch(ctx context.Context, ids []int, concurrency int) []*
 			if err != nil || item == nil || item.Dead || item.Deleted {
 				return
 			}
-			mu.Lock()
-			results = append(results, item)
-			mu.Unlock()
-		}(id)
+			slots[idx] = item
+		}(i, id)
 	}
 	wg.Wait()
+
+	results := make([]*FirebaseItem, 0, len(ids))
+	for _, item := range slots {
+		if item != nil {
+			results = append(results, item)
+		}
+	}
 	return results
 }
 

@@ -144,7 +144,11 @@ const (
 // SearchOptions configures an Algolia search request.
 type SearchOptions struct {
 	// Tags restricts results to specific content types (default: any).
+	// Multiple tags are AND-ed. For OR, use TagsOr instead.
 	Tags []SearchTag
+	// TagsOr groups tags with OR logic — Algolia syntax: (tag1,tag2).
+	// This is combined with Tags via AND: tags=Tags,(TagsOr)
+	TagsOr []SearchTag
 	// Page is zero-based.
 	Page int
 	// HitsPerPage defaults to 20; max 100.

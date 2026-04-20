@@ -30,7 +30,7 @@ func (c *Client) Unvote(ctx context.Context, itemID int, auth string) error {
 
 func (c *Client) voteAction(ctx context.Context, itemID int, how, auth string) error {
 	if auth == "" {
-		return fmt.Errorf("hn: vote: auth token is empty (item already voted or not found on page)")
+		return fmt.Errorf("%w: vote auth token is empty (item already voted or not found on page)", ErrBadRequest)
 	}
 	path := fmt.Sprintf("/vote?id=%d&how=%s&auth=%s&goto=news", itemID, how, auth)
 	status, _, err := c.hnGetNoFollow(ctx, path)
@@ -46,7 +46,7 @@ func (c *Client) voteAction(ctx context.Context, itemID int, how, auth string) e
 // Hide hides itemID from the feed using Story.HideAuth.
 func (c *Client) Hide(ctx context.Context, itemID int, auth string) error {
 	if auth == "" {
-		return fmt.Errorf("hn: hide: auth token is empty")
+		return fmt.Errorf("%w: hide auth token is empty", ErrBadRequest)
 	}
 	path := fmt.Sprintf("/hide?id=%d&auth=%s&goto=news", itemID, auth)
 	status, _, err := c.hnGetNoFollow(ctx, path)
@@ -62,7 +62,7 @@ func (c *Client) Hide(ctx context.Context, itemID int, auth string) error {
 // Fave adds itemID to the authenticated user's favourites using Story.FaveAuth.
 func (c *Client) Fave(ctx context.Context, itemID int, auth string) error {
 	if auth == "" {
-		return fmt.Errorf("hn: fave: auth token is empty")
+		return fmt.Errorf("%w: fave auth token is empty", ErrBadRequest)
 	}
 	path := fmt.Sprintf("/fave?id=%d&auth=%s", itemID, auth)
 	status, _, err := c.hnGetNoFollow(ctx, path)
@@ -78,7 +78,7 @@ func (c *Client) Fave(ctx context.Context, itemID int, auth string) error {
 // Flag flags itemID as problematic. Requires ≥30 karma; returns ErrForbidden otherwise.
 func (c *Client) Flag(ctx context.Context, itemID int, auth string) error {
 	if auth == "" {
-		return fmt.Errorf("hn: flag: auth token is empty (need ≥30 karma to flag)")
+		return fmt.Errorf("%w: flag auth token is empty (need ≥30 karma)", ErrBadRequest)
 	}
 	path := fmt.Sprintf("/flag?id=%d&auth=%s", itemID, auth)
 	status, _, err := c.hnGetNoFollow(ctx, path)
@@ -99,13 +99,13 @@ func (c *Client) Flag(ctx context.Context, itemID int, auth string) error {
 // Use GetReplyForm(ctx, parentID) to obtain the ReplyForm first.
 func (c *Client) Comment(ctx context.Context, form *ReplyForm, text string) error {
 	if form == nil {
-		return fmt.Errorf("hn: comment: reply form is nil — call GetReplyForm first")
+		return fmt.Errorf("%w: reply form is nil — call GetReplyForm first", ErrBadRequest)
 	}
 	if form.HMAC == "" {
-		return fmt.Errorf("hn: comment: reply form has no hmac")
+		return fmt.Errorf("%w: reply form has no hmac", ErrBadRequest)
 	}
 	if strings.TrimSpace(text) == "" {
-		return fmt.Errorf("hn: comment: text is empty")
+		return fmt.Errorf("%w: comment text is empty", ErrBadRequest)
 	}
 
 	body, err := c.hnPost(ctx, "/comment", url.Values{
@@ -131,16 +131,16 @@ func (c *Client) Comment(ctx context.Context, form *ReplyForm, text string) erro
 // For an Ask HN post: set title + text, leave storyURL empty.
 func (c *Client) Submit(ctx context.Context, form *SubmitForm, title, storyURL, text string) error {
 	if form == nil {
-		return fmt.Errorf("hn: submit: form is nil — call GetSubmitForm first")
+		return fmt.Errorf("%w: submit form is nil — call GetSubmitForm first", ErrBadRequest)
 	}
 	if form.FNID == "" {
-		return fmt.Errorf("hn: submit: form has no fnid (not logged in?)")
+		return fmt.Errorf("%w: submit form has no fnid (not logged in?)", ErrBadRequest)
 	}
 	if strings.TrimSpace(title) == "" {
-		return fmt.Errorf("hn: submit: title is required")
+		return fmt.Errorf("%w: submit title is required", ErrBadRequest)
 	}
 	if storyURL != "" && text != "" {
-		return fmt.Errorf("hn: submit: provide either url or text, not both")
+		return fmt.Errorf("%w: submit — provide either url or text, not both", ErrBadRequest)
 	}
 
 	vals := url.Values{
@@ -189,10 +189,10 @@ func (c *Client) SubmitAskHN(ctx context.Context, title, text string) error {
 // Fetch current values with GetUserSettings first to populate HMAC + ID.
 func (c *Client) UpdateUserSettings(ctx context.Context, s *UserSettings) error {
 	if s == nil {
-		return fmt.Errorf("hn: update settings: settings is nil — call GetUserSettings first")
+		return fmt.Errorf("%w: settings is nil — call GetUserSettings first", ErrBadRequest)
 	}
 	if s.HMAC == "" || s.ID == "" {
-		return fmt.Errorf("hn: update settings: id and hmac are required")
+		return fmt.Errorf("%w: settings id and hmac are required", ErrBadRequest)
 	}
 	showDead := "no"
 	if s.ShowDead {

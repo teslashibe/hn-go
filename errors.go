@@ -12,6 +12,7 @@ var (
 	ErrForbidden       = errors.New("hn: action forbidden (insufficient karma or invalid auth token)")
 	ErrRateLimited     = errors.New("hn: rate limited")
 	ErrParseFailure    = errors.New("hn: failed to parse page")
+	ErrBadRequest      = errors.New("hn: invalid or missing parameter")
 )
 
 // HTTPError is returned for unexpected non-2xx / non-3xx HTTP responses.

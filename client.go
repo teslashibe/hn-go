@@ -39,8 +39,8 @@ type Client struct {
 	rateLimit     time.Duration // min delay between authenticated HN requests (0 = no limit)
 	rateMu        sync.Mutex
 	lastHNRequest time.Time
-	sessionOnce   sync.Once
-	sessionValid  bool
+	sessionOnce sync.Once
+	sessionErr  error // sticky error from first validation attempt
 }
 
 // Option customises a Client.
@@ -85,8 +85,12 @@ func WithRateLimit(d time.Duration) Option {
 // cookie is the raw value of the "user" session cookie from a logged-in
 // browser, e.g. "teslashibe&Yvut3pZNKZDEpjkDenOxfHyhbyoSDShn".
 func New(cookie string, opts ...Option) (*Client, error) {
-	if strings.TrimSpace(cookie) == "" {
+	cookie = strings.TrimSpace(cookie)
+	if cookie == "" {
 		return nil, ErrUnauthenticated
+	}
+	if !strings.Contains(cookie, "&") {
+		return nil, fmt.Errorf("%w: cookie must contain username&token (got %q)", ErrUnauthenticated, cookie)
 	}
 	c := &Client{
 		userCookie: cookie,
@@ -104,7 +108,8 @@ func New(cookie string, opts ...Option) (*Client, error) {
 // ValidateSession checks whether the user cookie is still valid by fetching the
 // front page and inspecting the HTML for a logout link. Returns ErrUnauthenticated
 // if the session has expired. This is called automatically on the first
-// authenticated request.
+// authenticated request. On transient failure the result is NOT cached — the
+// next call will retry.
 func (c *Client) ValidateSession(ctx context.Context) error {
 	body, err := c.doGet(ctx, hnBase+"/", true)
 	if err != nil {
@@ -113,18 +118,23 @@ func (c *Client) ValidateSession(ctx context.Context) error {
 	if !isAuthenticated(body) {
 		return ErrUnauthenticated
 	}
-	c.sessionValid = true
 	return nil
 }
 
-// ensureSession runs ValidateSession exactly once, on the first authenticated
-// request. Subsequent calls are no-ops.
+// ensureSession validates the session exactly once. On success, subsequent
+// calls are no-ops. On failure the Once is reset so the next call retries
+// (handles transient network errors without permanently poisoning the client).
 func (c *Client) ensureSession(ctx context.Context) error {
-	var sessionErr error
 	c.sessionOnce.Do(func() {
-		sessionErr = c.ValidateSession(ctx)
+		c.sessionErr = c.ValidateSession(ctx)
 	})
-	return sessionErr
+	if c.sessionErr != nil {
+		err := c.sessionErr
+		c.sessionOnce = sync.Once{} // reset so next call retries
+		c.sessionErr = nil
+		return err
+	}
+	return nil
 }
 
 // --- internal HTTP helpers ---
@@ -162,6 +172,8 @@ func (c *Client) hnGetNoFollow(ctx context.Context, path string) (int, string, e
 		return 0, "", fmt.Errorf("hn: request: %w", err)
 	}
 	defer resp.Body.Close()
+	// Drain body so the underlying TCP connection can be reused by keep-alive.
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxResponseBody))
 	return resp.StatusCode, resp.Header.Get("Location"), nil
 }
 
