@@ -16,6 +16,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -41,6 +42,13 @@ type Client struct {
 	lastHNRequest time.Time
 	sessionOnce sync.Once
 	sessionErr  error // sticky error from first validation attempt
+
+	// Rate-limit tracking.
+	rlMu      sync.Mutex
+	rlState   RateLimitState
+	gapMu     sync.Mutex
+	lastReqAt time.Time
+	minGap    time.Duration
 }
 
 // Option customises a Client.
@@ -77,6 +85,7 @@ func WithUserAgent(ua string) Option {
 func WithRateLimit(d time.Duration) Option {
 	return func(c *Client) {
 		c.rateLimit = d
+		c.minGap = d
 	}
 }
 
@@ -172,6 +181,7 @@ func (c *Client) hnGetNoFollow(ctx context.Context, path string) (int, string, e
 		return 0, "", fmt.Errorf("hn: request: %w", err)
 	}
 	defer resp.Body.Close()
+	c.updateRateLimit(resp.Header)
 	// Drain body so the underlying TCP connection can be reused by keep-alive.
 	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxResponseBody))
 	return resp.StatusCode, resp.Header.Get("Location"), nil
@@ -215,29 +225,10 @@ func (c *Client) doGet(ctx context.Context, rawURL string, auth bool) ([]byte, e
 	return c.execute(req)
 }
 
-// waitRateLimit serialises authenticated requests so that at most one fires
-// per rateLimit interval. The lock is held across the sleep to prevent
-// concurrent callers from reading a stale lastHNRequest and bypassing the gap.
+// waitRateLimit serialises authenticated requests. Delegates to waitForGap.
 func (c *Client) waitRateLimit(ctx context.Context) error {
-	if c.rateLimit == 0 {
-		return nil
-	}
-	c.rateMu.Lock()
-	defer c.rateMu.Unlock()
-
-	wait := time.Until(c.lastHNRequest.Add(c.rateLimit))
-	if wait > 0 {
-		c.rateMu.Unlock()
-		select {
-		case <-time.After(wait):
-		case <-ctx.Done():
-			c.rateMu.Lock()
-			return ctx.Err()
-		}
-		c.rateMu.Lock()
-	}
-	c.lastHNRequest = time.Now()
-	return nil
+	c.waitForGap(ctx)
+	return ctx.Err()
 }
 
 func (c *Client) newHNReq(ctx context.Context, method, rawURL string, body io.Reader) (*http.Request, error) {
@@ -250,6 +241,116 @@ func (c *Client) newHNReq(ctx context.Context, method, rawURL string, body io.Re
 	req.Header.Set("Referer", hnBase+"/")
 	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
 	return req, nil
+}
+
+// RateLimit returns a snapshot of the most recently observed rate-limit state.
+func (c *Client) RateLimit() RateLimitState {
+	c.rlMu.Lock()
+	defer c.rlMu.Unlock()
+	return c.rlState
+}
+
+// updateRateLimit reads standard rate-limit headers and updates tracked state.
+func (c *Client) updateRateLimit(h http.Header) {
+	c.rlMu.Lock()
+	defer c.rlMu.Unlock()
+	if v := rlHeader(h, "Limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			c.rlState.Limit = n
+		}
+	}
+	if v := rlHeader(h, "Remaining"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			c.rlState.Remaining = n
+		}
+	}
+	if v := rlHeader(h, "Reset"); v != "" {
+		if ts, err := strconv.ParseInt(v, 10, 64); err == nil {
+			if ts > 1_000_000_000 {
+				c.rlState.Reset = time.Unix(ts, 0)
+			} else {
+				c.rlState.Reset = time.Now().Add(time.Duration(ts) * time.Second)
+			}
+		}
+	}
+}
+
+// rlHeader returns the value of a rate-limit header, checking four common prefix variants.
+func rlHeader(h http.Header, suffix string) string {
+	for _, p := range []string{"X-RateLimit-", "X-Rate-Limit-", "X-Ratelimit-", "RateLimit-"} {
+		if v := strings.TrimSpace(h.Get(p + suffix)); v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+// adaptiveGap returns the delay before the next request based on rate-limit state.
+func (c *Client) adaptiveGap() time.Duration {
+	c.rlMu.Lock()
+	rs := c.rlState
+	c.rlMu.Unlock()
+
+	if rs.Remaining == 0 && !rs.Reset.IsZero() {
+		if d := time.Until(rs.Reset); d > 0 {
+			return d + 50*time.Millisecond
+		}
+	}
+	if rs.Remaining > 0 && !rs.Reset.IsZero() {
+		if d := time.Until(rs.Reset); d > 0 {
+			spread := d / time.Duration(float64(rs.Remaining)*0.9)
+			if spread > c.minGap {
+				return spread
+			}
+		}
+	}
+	return c.minGap
+}
+
+// waitForGap enforces the min request gap, honouring rate-limit state adaptively.
+func (c *Client) waitForGap(ctx context.Context) {
+	gap := c.adaptiveGap()
+	c.gapMu.Lock()
+	now := time.Now()
+	next := c.lastReqAt.Add(gap)
+	if now.After(next) {
+		next = now
+	}
+	c.lastReqAt = next
+	c.gapMu.Unlock()
+
+	if wait := time.Until(next); wait > 0 {
+		select {
+		case <-ctx.Done():
+		case <-time.After(wait):
+		}
+	}
+	c.rlMu.Lock()
+	c.rlState.RetryAfter = 0
+	c.rlMu.Unlock()
+}
+
+// parseRetryAfter parses the Retry-After header (seconds integer, unix timestamp, or HTTP-date).
+func parseRetryAfter(val string, fallback time.Duration) time.Duration {
+	if val == "" {
+		return fallback
+	}
+	trimmed := strings.TrimSpace(val)
+	if n, err := strconv.ParseInt(trimmed, 10, 64); err == nil {
+		if n > 1_000_000_000 {
+			if d := time.Until(time.Unix(n, 0)); d > 0 {
+				return d
+			}
+			return fallback
+		}
+		return time.Duration(n) * time.Second
+	}
+	if t, err := http.ParseTime(trimmed); err == nil {
+		if d := time.Until(t); d > 0 {
+			return d
+		}
+	}
+	return fallback
 }
 
 const maxResponseBody = 10 << 20 // 10 MB
@@ -266,6 +367,7 @@ func (c *Client) execute(req *http.Request) ([]byte, error) {
 		return nil, fmt.Errorf("hn: read body: %w", err)
 	}
 
+	c.updateRateLimit(resp.Header)
 	switch resp.StatusCode {
 	case http.StatusOK, http.StatusFound, http.StatusMovedPermanently:
 		return body, nil
@@ -274,7 +376,20 @@ func (c *Client) execute(req *http.Request) ([]byte, error) {
 	case http.StatusNotFound:
 		return nil, ErrNotFound
 	case http.StatusTooManyRequests:
-		return nil, ErrRateLimited
+		wait := parseRetryAfter(resp.Header.Get("Retry-After"), 60*time.Second)
+		c.rlMu.Lock()
+		c.rlState.Remaining = 0
+		c.rlState.RetryAfter = wait
+		if c.rlState.Reset.IsZero() || time.Until(c.rlState.Reset) < wait {
+			c.rlState.Reset = time.Now().Add(wait)
+		}
+		c.rlMu.Unlock()
+		c.gapMu.Lock()
+		if earliest := time.Now().Add(wait); c.lastReqAt.Before(earliest) {
+			c.lastReqAt = earliest
+		}
+		c.gapMu.Unlock()
+		return nil, fmt.Errorf("%w: retry after %s", ErrRateLimited, wait)
 	default:
 		return nil, &HTTPError{StatusCode: resp.StatusCode, Body: string(body)}
 	}
