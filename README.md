@@ -210,6 +210,27 @@ Every endpoint below has been verified against the live HN site:
 | Domain filter | `FromDomain()` | Yes |
 | User activity | `UserSubmissions()` `UserThreads()` `Favorites()` `Upvoted()` | Yes |
 
+## MCP support
+
+This package ships an [MCP](https://modelcontextprotocol.io/) tool surface in `./mcp` for use with [`teslashibe/mcptool`](https://github.com/teslashibe/mcptool)-compatible hosts (e.g. [`teslashibe/agent-setup`](https://github.com/teslashibe/agent-setup)). 42 tools cover the full client API: every HTML feed (top, new, best, ask, show, jobs, launches, front, by-domain, by-user), full thread + comment fetch, the public Firebase REST API (item, user, top/new/best/ask/show/job IDs, batch hydration, updates, hiring threads, max item ID), Algolia search (relevance + by-date with tag/numeric filters), and every authenticated action (upvote, unvote, hide, favourite, flag, post comment, submit story / Show HN / Ask HN, update user settings, validate session).
+
+```go
+import (
+    "github.com/teslashibe/mcptool"
+    hn "github.com/teslashibe/hn-go"
+    hnmcp "github.com/teslashibe/hn-go/mcp"
+)
+
+client, _ := hn.New("user&token")
+provider := hnmcp.Provider{}
+for _, tool := range provider.Tools() {
+    // register tool with your MCP server, passing client as the
+    // opaque client argument when invoking
+}
+```
+
+A coverage test in `mcp/mcp_test.go` fails if a new exported method is added to `*Client` without either being wrapped by an MCP tool or being added to `mcp.Excluded` with a reason — keeping the MCP surface in lockstep with the package API is enforced by CI rather than convention.
+
 ## Limitations
 
 - **No private messaging** — HN has no DM system. Reply publicly or read `FirebaseUser.About` for contact info.
