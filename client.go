@@ -12,6 +12,7 @@ package hn
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -23,7 +24,7 @@ import (
 )
 
 const (
-	hnBase      = "https://news.ycombinator.com"
+	hnBase       = "https://news.ycombinator.com"
 	firebaseBase = "https://hacker-news.firebaseio.com/v0"
 	algoliaBase  = "https://hn.algolia.com/api/v1"
 
@@ -34,14 +35,22 @@ const (
 
 // Client is an authenticated Hacker News client.
 type Client struct {
-	userCookie    string // raw value of the "user" cookie
+	cookieMu   sync.Mutex // guards userCookie (rotated on relogin)
+	userCookie string     // raw value of the "user" cookie
+
+	// Credential login (Social OS). When set, the client can self-heal by
+	// re-logging-in to mint a fresh `user` cookie when the session expires.
+	username string
+	password string
+	loginMu  sync.Mutex // serialises relogin so callers don't stampede /login
+
 	http          *http.Client
 	userAgent     string
 	rateLimit     time.Duration // min delay between authenticated HN requests (0 = no limit)
 	rateMu        sync.Mutex
 	lastHNRequest time.Time
-	sessionOnce sync.Once
-	sessionErr  error // sticky error from first validation attempt
+	sessionOnce   sync.Once
+	sessionErr    error // sticky error from first validation attempt
 
 	// Rate-limit tracking.
 	rlMu      sync.Mutex
@@ -141,6 +150,14 @@ func (c *Client) ensureSession(ctx context.Context) error {
 		err := c.sessionErr
 		c.sessionOnce = sync.Once{} // reset so next call retries
 		c.sessionErr = nil
+		// Self-heal: if the session is dead but we hold credentials, mint a
+		// fresh one and retry validation once before surfacing the error.
+		if errors.Is(err, ErrUnauthenticated) && c.canRelogin() {
+			if lerr := c.relogin(ctx); lerr != nil {
+				return lerr
+			}
+			return c.ValidateSession(ctx)
+		}
 		return err
 	}
 	return nil
@@ -236,7 +253,7 @@ func (c *Client) newHNReq(ctx context.Context, method, rawURL string, body io.Re
 	if err != nil {
 		return nil, fmt.Errorf("hn: build request: %w", err)
 	}
-	req.Header.Set("Cookie", "user="+c.userCookie)
+	req.Header.Set("Cookie", "user="+c.currentCookie())
 	req.Header.Set("User-Agent", c.userAgent)
 	req.Header.Set("Referer", hnBase+"/")
 	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
