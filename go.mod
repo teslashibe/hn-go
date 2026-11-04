@@ -1,10 +1,10 @@
 module github.com/teslashibe/hn-go
 
-go 1.25.5
+go 1.26.0
 
 require (
 	github.com/teslashibe/mcptool v0.1.0
-	golang.org/x/net v0.53.0
+	golang.org/x/net v0.62.0
 )
 
 require (
